@@ -1,0 +1,357 @@
+---
+title: "Teaching Jobs expert input"
+author: "Vladimer"
+date: "29 maart 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tm)
+#library(text2vec)
+#library(tokenizers)
+library(stringr)
+library(stringi)
+library(stm)
+library(slam)
+library(lsa)
+```
+
+##
+
+
+## Import Data
+
+```{r}
+library(tm)
+
+expert_corpus_aard <- VCorpus(DirSource(directory="expert_input/Aardrijkskunde", pattern=".txt", recursive=TRUE, encoding="UTF-8"))
+
+jtype = rep("Aardrijkskunde",12)
+i <- 0
+expert_corpus_aard = tm_map(expert_corpus_aard, function(x) {
+   i <<- i +1
+   meta(x, "JobType") <- jtype[i]
+   x
+})
+expert_corpus_aard[[1]]$meta
+#meta(expert_corpus_aard,tag="jobType")<-"aardrijkskunde"
+
+expert_corpus_ned <- VCorpus(DirSource(directory="expert_input/fwvacatureonderzoeknl", pattern=".txt", recursive=TRUE, encoding="UTF-8"))
+
+jtype = rep("Nederlands",17)
+i <- 0
+expert_corpus_ned = tm_map(expert_corpus_ned, function(x) {
+   i <<- i +1
+   meta(x, "JobType") <- jtype[i]
+   x
+})
+expert_corpus_ned[[1]]$meta
+
+#meta(expert_corpus_ned,tag="jobType")<-"ned"
+
+expert_corpus_wis <- VCorpus(DirSource(directory="expert_input/Wiskunde", pattern=".txt", recursive=TRUE, encoding="UTF-8"))
+
+jtype = rep("Wiskunde",17)
+i <- 0
+expert_corpus_wis = tm_map(expert_corpus_wis, function(x) {
+   i <<- i +1
+   meta(x, "JobType") <- jtype[i]
+   x
+})
+expert_corpus_wis[[1]]$meta
+#meta(expert_corpus_wis,tag="jobType")<-"wiskunde"
+
+cc <- c(expert_corpus_aard,expert_corpus_ned,expert_corpus_wis)
+
+#corpus_expert <-c(expert_corpus_aard,expert_corpus_ned, recursive=TRUE)
+#corpus_expert<-do.call(function(...) c(..., recursive = TRUE), cc)
+```
+
+```{r}
+cc <- tm_map(cc, content_transformer(function(x) str_replace_all(string=x, pattern="[[:punct:]]", replacement=" ")))
+
+  cc <- tm_map(cc, removeWords, words=tm::stopwords("dutch"))
+  cc <- tm_map(cc, removeWords, words=tm::stopwords("english"))
+  cc <- tm_map(cc, removeNumbers)
+  cc <- tm_map(cc, stemDocument, language= "dutch")
+  cc <- tm_map(cc, stemDocument, language= "english")
+  cc <- tm_map(cc, removePunctuation)
+  cc <- tm_map(cc, stripWhitespace)
+
+
+
+cc_dtm_tf <-DocumentTermMatrix(cc, control=list(minWordLength=3, removePunctuation=TRUE))
+
+
+
+#term_tfidf <-
+# tapply(cc_dtm_tf$v/row_sums(cc_dtm_tf)[cc_dtm_tf$i], cc_dtm_tf$j, mean) *
+ #log2(nDocs(cc_dtm_tf)/col_sums(cc_dtm_tf > 0))
+
+#summary(term_tfidf)
+#hist(term_tfidf)
+
+#cc_dtm_tf <- cc_dtm_tf[,term_tfidf >= 0.007 ]
+
+#cc_dtm_tf <- cc_dtm_tf[row_sums(cc_dtm_tf) > 0,]
+
+#ned_dtm_mat <- as.matrix(cc_dtm_tf)
+
+term_idf <- log2(nDocs(cc_dtm_tf)/col_sums(cc_dtm_tf > 0))
+
+summary(term_idf)
+hist(term_idf)
+#lowq <- quantile(term_idf, probs=0.05, names=FALSE)
+#highq <- quantile(term_idf, probs=0.25, names=FALSE)
+
+#cc_dtm_idf <- cc_dtm_tf[,term_idf >= lowq & term_idf <= highq]
+cc_dtm_idf <- cc_dtm_tf[,term_idf >= 0.04]
+cc_dtm_idf <- cc_dtm_idf[row_sums(cc_dtm_idf) > 0,]
+
+dimnames(cc_dtm_idf)$Terms[1:30]
+
+
+cc_dtm_idf <- cc_dtm_idf[, -c(1:13)]
+cc_dtm_idf <- cc_dtm_idf[row_sums(cc_dtm_idf) > 0,]
+cc_dtm_idf <- unique(cc_dtm_idf)
+
+#aardrijk_dtm_idf_mat <- as.matrix(cc_dtm_idf)
+
+```
+
+```{r}
+td.mat_exp <- as.matrix(t(cc_dtm_idf))
+td.mat_exp <- unique(td.mat_exp)
+td.mat.lsa_exp <- lw_tf(td.mat_exp) * gw_idf(td.mat_exp)  # weighting
+lsaSpace_exp <- lsa(td.mat.lsa_exp, dims=dimcalc_share(share=0.99))  # create LSA space
+str(lsaSpace_exp)
+
+teacher_lsa_mat_exp<-as.textmatrix(lsaSpace_exp)
+save(lsaSpace_exp, teacher_lsa_mat_exp, file="LSA_res_exp.rda")
+save(td.mat_exp,cc_dtm_idf,cc, file="LSA_res_supp_exp.rda")
+
+```
+
+
+
+```{r}
+cc_corpus <- readCorpus(cc_dtm_idf, type=c("slam"))
+documents <- cc_corpus$documents
+vocab <- cc_corpus$vocab
+meta <- unname(unlist(meta(cc,"JobType")))
+
+#plotRemoved(documents, lower.thresh = seq(1,200, by=100))
+
+ccPrevFit <- stm(documents =documents, vocab = vocab, K=20, prevalence =~ meta, content=~ meta, max.em.its=75, init.type="Spectral")
+
+#labelTopics(ccPrevFit, c(3,5,20))
+#findThoughts(ccPrevFit, n=3)
+plot(ccPrevFit, type="summary", xlim=c(0,.3))
+### topics 3
+plot(ccPrevFit, type="perspectives", topics=10, covarlevels = c(1,2))
+
+plot(ccPrevFit, type="hist")
+``
+
+
+
+## Aardrijkskunde
+
+```{r}
+#myfile <- "C:\\Users\\alluring\\Google Drive\\CJKR\\PhD Projects\\Vladimer\\Hybrid jobs\\expert_input\\Aardrijkskunde\\vakinhoudelijk_aardrijk.txt"
+
+#mydoc <- read_file_docu(myfile)
+
+#mydoc_prep <- prep_docu(mydoc)
+
+read_file_docu <- function(docpath){
+  #readChar(docpath, file.info(docpath)$size)
+  paste(readLines(docpath), collapse = "\n")
+}
+
+
+
+prep_docu <- function(doc){
+  #unlist(lapply(tokenize_lines(doc), tokenize_sentences))
+  #vac_tokens <- doc %>% tokenize_words_stem(stopwords=tm::stopwords("nl"), language="nl") %>% stri_enc_toutf8
+  #tolower(paste0(vac_tokens[vac_tokens %in% GradyAugmented], collapse=" "))
+  vac_tokens <- doc %>% tolower %>% removePunctuation %>% removeNumbers %>% removeWords(words=tm::stopwords(kind="nl")) %>% str_replace_all("[[:punct:]]", " ") %>% stri_enc_toutf8
+  #%>% stemDocument(language="dutch")
+  #paste0(vac_tokens, collapse=" ")
+  return(vac_tokens)
+}
+
+stem_tokenizer = function(x) {
+  tokenize_word_stems(x, language="dutch") 
+}
+
+#stem_tokenizer(mydoc_prep)
+
+#%>% lapply(SnowballC::wordStem, language="dutch") 
+
+prep_fun = prep_docu
+tok_fun = stem_tokenizer
+
+docpath<- "expert_input"
+current_dir_files = list.files(path=docpath, full.names=TRUE, recursive=TRUE, pattern=".txt")
+files_iterator = ifiles(current_dir_files, reader = read_file_docu)
+
+it_train = itoken(files_iterator,
+                  preprocessor = prep_fun,
+                  tokenizer = tok_fun,
+                  progressbar = TRUE)
+
+
+#prep_fun = tolower
+#tok_fun = word_tokenizer
+
+#it_train = itoken(content(cc), preprocessor = prep_fun,
+#                  tokenizer = tok_fun
+#                  )
+
+vocab = create_vocabulary(it_train, stopwords=c(tm::stopwords("nl"), letters))
+
+vocab = prune_vocabulary(vocab,term_count_min=5)
+
+vectorizer = vocab_vectorizer(vocab, skip_grams_window = 5)
+
+tcm = create_tcm(it_train, vectorizer)
+dtm = create_dtm(it_train, vectorizer)
+
+glove = GloVe$new(word_vectors_size = 50, vocabulary=vocab, x_max =5)
+glove$fit(tcm, n_iter=50)
+#glove$fit(tcm, n_iter=20)
+
+word_vectors <- glove$get_word_vectors()
+
+rwmd = RelaxedWordMoversDistance$new(word_vectors, method="cosine")
+
+
+RWMD = RelaxedWordMoversDistance
+
+rwmd_model = RWMD$new(wv)
+rwmd_model = text2vec::RWMD(wv)
+
+
+data("movie_review")
+tokens = movie_review$review %>%
+  tolower %>%
+  word_tokenizer
+v = create_vocabulary(itoken(tokens)) %>%
+  prune_vocabulary(term_count_min = 5, doc_proportion_max = 0.5)
+corpus = create_corpus(itoken(tokens), vocab_vectorizer(v, skip_grams_window = 5))
+dtm = get_dtm(corpus)
+tcm = get_tcm(corpus)
+glove_model = GloVe$new(word_vectors_size = 50, vocabulary = v, x_max = 10)
+glove_model$fit(tcm, n_iter = 10)
+
+wv = glove_model$get_word_vectors()
+
+RWMD = RelaxedWordMoversDistance
+
+rwmd_model = RelaxedWordMoversDistance$new(wv, method="cosine")
+rwmd_dist = dist2(dtm[1:2, ], dtm[3:7, ], method = rwmd_model, norm = 'none')
+
+
+### lsa
+# create a first textmatrix with some files
+td = tempfile()
+dir.create(td)
+write( c("romeo", "juliet"), file=paste(td, "D1", sep="/") )
+write( c("juliet", "happy", "dagger"), file=paste(td, "D2", sep="/") )
+write( c("romeo", "dagger", "die"), file=paste(td, "D3", sep="/") )
+write( c("live", "die", "free","newhampshire"), file=paste(td, "D4", sep="/") )
+write( c("newhampshire"), file=paste(td, "D5", sep="/") )
+
+
+matrix1 = textmatrix(td, minWordLength=1)
+unlink(td, recursive=TRUE)
+
+# create a second textmatrix with some more files
+td = tempfile()
+dir.create(td)
+write( c("cat", "mouse", "mouse"), file=paste(td, "A1", sep="/") )
+write( c("nothing", "mouse", "monster"), file=paste(td, "A2", sep="/") )
+write( c("cat", "monster", "monster"), file=paste(td, "A3", sep="/") )
+matrix2 = textmatrix(td, vocabulary=rownames(matrix1), minWordLength=1)
+unlink(td, recursive=TRUE)
+
+# create an LSA space from matrix1
+space1 = lsa(matrix1, dims=dimcalc_share())
+as.textmatrix(space1)
+
+# fold matrix2 into the space generated by matrix1
+fold_in( matrix2, space1)
+```
+
+
+```{r}
+jobMatches_exp <- read.table("jobMatches_expert.txt", sep="\t", header=TRUE)
+
+mynames_aard <- c(paste0(rep("aard", 11),"_",1:11), "aard_vakin")
+
+mynames_ned <- c(paste0(rep("ned", 16),"_",13:28), "ned_vakin")
+
+mynames_wis <- c("wis_vakin",paste0(rep("wis", 16),"_",31:46))
+
+names(jobMatches_exp)<- c(mynames_aard, mynames_ned, mynames_wis,"id","title")
+
+jobDF <- read.table("..\\data_no_duplicates\\output.30705741_no_duplicates.txt", header=FALSE, sep="\t", quote="", comment.char = "")
+
+matchDF <- read.table("data_matching.txt", sep="\t", header=TRUE)
+
+ matchDF[is.na(matchDF)] <- 0
+#V13
+
+# aard 94; ned 437; wis 425
+#jobDF[which(jobDF$V1==30973903),]
+
+neddf <- matchDF[matchDF$maximumJobScore >= 0.3 & matchDF$cnt_aardrijkskunde >= 10 & matchDF$cnt_nederlands <= 200,]
+
+#neddf <- na.omit(neddf)
+ neddf<-neddf[rowSums(is.na(neddf))!=7, ]
+head(neddf)
+dim(neddf)
+
+#neddf_expert <- jobMatches_exp[]
+
+jobgroup <- jobDF[which(jobDF$V1 %in% neddf$id),c("V1","V9","V13")]
+names(jobgroup) <- c("id", "jobGroup","jobGroupBroad")
+
+jobgroup_exp <- jobMatches_exp[which(jobMatches_exp$id %in% neddf$id),]
+
+combineDF<-merge(neddf, jobgroup, by = "id")
+combineDF_exp <- merge(combineDF, jobgroup_exp , by="id")
+combineDF_exp$title.y<- NULL
+combineDF_exp$title.x <- as.character(combineDF_exp$title.x)
+
+sort(table(combineDF$jobGroup), decreasing=TRUE)[1:30]
+sort(table(combineDF$jobGroupBroad), decreasing=TRUE)[1:30]
+dim(combineDF_exp[combineDF_exp$aard_vakin >= 0.3,])
+
+View(combineDF_exp[combineDF_exp$aard_vakin >= 0.3,c("title.x","jobGroup","jobGroupBroad","aard_vakin")])
+sort(table(combineDF_exp[combineDF_exp$ned_vakin >= 0.1,"jobGroup"]), decreasing=TRUE)[1:20]
+sort(table(combineDF_exp[combineDF_exp$ned_vakin >= 0.1,"jobGroupBroad"]), decreasing=TRUE)[1:22]
+#length(combineDF_exp[combineDF_exp$wis_vakin>0.1,"title.x"])
+#table(combineDF_exp[combineDF_exp$aard_vakin>0.1,"title.x"])
+#combineDF<-Reduce(function(x,y) merge(x,y, all=TRUE, by= "id"), list(jobgroup,neddf, jobgroup_exp))
+
+head(combineDF[combineDF$aard_vakin >.2,])
+
+sort(table(combineDF$jobGroup), decreasing=TRUE)
+
+names(sort(table(combineDF$jobGroup), decreasing=TRUE))
+
+
+sortDF<-combineDF[order(combineDF$cnt_nederlands, decreasing=TRUE),c("cnt_nederlands","cnt_wiskunde","cnt_aardrijkskunde","jobGroup","maximumJobScore","title")]
+
+View(sortDF[sortDF$jobGroup=="Persoonlijke dienstverlening",])
+View(sortDF)
+
+sort(table(jobgroup$V13))
+
+jobgroup[jobgroup$V13 == "Persoonlijke dienstverlening",]
+
+```

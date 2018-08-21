@@ -1,0 +1,13 @@
+name: analysis_en_vis
+title: analysis_en_vis
+username:
+account: vkobayashi
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 201998
+bundleId: 1411404
+url: https://vkobayashi.shinyapps.io/analysis_en_vis/
+when: 1528152231.20033
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: kaiser_big_df.txt|kaiser_match_final_df.txt|kaiser_matches.txt|kaiser_matching_30705741.txt|kaiser_matching_df_complete.txt|kaiser_sample.txt|match_output.R|matches.rda|output.30705741.txt|sample_plotly_codes.R|share_matches.txt|shareidf_matches.txt

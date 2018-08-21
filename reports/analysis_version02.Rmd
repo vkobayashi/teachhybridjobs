@@ -1,0 +1,265 @@
+---
+title: "Hybrid Jobs part 2"
+author: "Vladimer"
+date: "26 maart 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+require(lexRankr)
+library(openNLP)
+require(openNLPmodels.nl)
+require(dbscan)
+require(proxy)
+require(sampling)
+require(dplyr)
+```
+
+# Illustration
+
+Here we illustrate how we determine the match between a vacancy (non-teaching) and a group of vacancies (teaching vacancies). This will be used to find hybrid jobs for teachers. 
+
+
+# Cleaned
+
+First we need to import the data.
+
+```{r}
+#set.seed(2017)
+teacher_desc <- read.table("teacher_skills_anw.txt", sep="\t", header=TRUE, stringsAsFactors=FALSE, comment="", quote="", encoding="ANSI")
+
+##number of observations: 14956
+
+#mysample <- strata(teacher_desc[, 12:13], stratanames ="job_type" , method="srswor",size=c(1000,1000,1000))
+
+#teacher_descr_only <- teacher_desc[which(teacher_desc$job_type %in% #c("nederlands","wiskunde")), 12:13, drop=TRUE]
+```
+
+
+# Create the Corpus
+
+Then we create the corpus.
+
+```{r}
+require(tm)
+require(stringr)
+corpus_creation <- function(mydata){
+
+  teaching_corpus <- VCorpus(VectorSource(mydata))
+
+  teaching_corpus <- tm_map(teaching_corpus, content_transformer(function(x) str_replace_all(string=x, pattern="[^[:alnum:][:space:]]", replacement=" ")))
+  teaching_corpus <- tm_map(teaching_corpus, content_transformer(tolower))
+
+  teaching_corpus <- tm_map(teaching_corpus, removeWords, words=c(tm::stopwords("nl"), "bent","hebt"))
+  
+  teaching_corpus <- tm_map(teaching_corpus, removeNumbers)
+  #teaching_corpus <- tm_map(teaching_corpus, stemDocument, language= "dutch")
+  #teaching_corpus <- tm_map(teaching_corpus, removePunctuation)
+  teaching_corpus <- tm_map(teaching_corpus, removeWords, words=c(tm::stopwords("SMART"),"aa","ттт"))
+  teaching_corpus <- tm_map(teaching_corpus, stripWhitespace)
+  #teaching_corpus <- tm_filter(teaching_corpus, FUN = function(x) nchar(x)!=0)
+  return(teaching_corpus)
+}
+
+teach_corpus <- corpus_creation(teacher_desc[,12])
+length(teach_corpus)
+teach_corpus <- tm_filter(teach_corpus, FUN = function(x) nchar(content(x))!=0)
+```
+
+# Create Document-by-Term matrix
+
+Then create the document-by-term matrix.
+
+```{r}
+library(slam)
+teach_dtm_tf <- DocumentTermMatrix(teach_corpus, control=list(wordLengths=c(2,Inf)))
+
+teach_dtm_tf <- teach_dtm_tf[row_sums(teach_dtm_tf) > 0,]
+```
+
+# Filter out some terms
+
+We filter out some terms using the inverse document frequency.
+
+```{r}
+library(ggplot2)
+# Remove redundant rows
+teach_dtm_tf <- unique(teach_dtm_tf)
+
+term_idf <- log2(nDocs(teach_dtm_tf)/col_sums(teach_dtm_tf > 0))
+
+#term_tfidf <- tapply(teach_dtm_tf$v/row_sums(teach_dtm_tf)[teach_dtm_tf$i], teach_dtm_tf$j, mean) * log2(nDocs(teach_dtm_tf)/col_sums(teach_dtm_tf > 0))
+
+summary(term_idf)
+ggplot() + aes(term_idf)+ geom_histogram(binwidth=0.1, colour="black", fill="white")
+
+highq <- quantile(term_idf, probs=0.50, names=FALSE)
+
+teach_dtm_idf <- teach_dtm_tf[, term_idf <= highq]
+
+teach_dtm_idf <- teach_dtm_idf[row_sums(teach_dtm_idf) > 0,]
+
+summary(col_sums(teach_dtm_idf))
+
+teach_dtm_idf <- unique(teach_dtm_idf)
+
+dim(teach_dtm_idf)
+
+## 11347 by 9438
+```
+
+### MDS
+
+```{r}
+dtm_mat <- as.matrix(teach_dtm_idf)
+dtm_dist <- proxy::dist(dtm_mat, method="cosine")
+```
+
+
+## LDA
+
+```{r}
+library(topicmodels)
+SEED= 2017
+k=100
+
+#teaching_TM <- list(VEM= LDA(teach_dtm_idf, k=100, control=list(seed=SEED)),
+#                 Gibbs= LDA(teach_dtm_idf, k=100,method="Gibbs", control=list(seed=SEED, burnin= 1000, thin=100, iter=1000)))
+teaching_TM = LDA(teach_dtm_idf, k=100,method="Gibbs", control=list(seed=SEED, burnin= 1000, thin=100, iter=1000))
+
+teaching_TM = LDA(teach_dtm_idf, k=100,method="VEM", control=list(seed=SEED))
+
+posterior(teaching_TM, teach_dtm_idf[1,])$topics
+teaching_TM@gamma[1,]
+
+Terms <- terms(teaching_TM, 10)
+Topics <- topics(teaching_TM,1)
+```
+
+## LSA
+
+We apply latent semantic analysis.
+
+```{r message=FALSE}
+library(lsa)
+
+numLSADim <- function(N){
+  expo <- 1+log10(N)/10
+  
+  return(N^(1/expo))
+  
+}
+
+td.mat <- as.matrix(t(teach_dtm_idf))
+#td.mat.lsa <- lw_bintf(td.mat) * gw_gfidf(td.mat)  # weighting
+td.mat.lsa <- lw_tf(td.mat) * gw_idf(td.mat)
+#td.mat.lsa <- td.mat
+lsaSpace_kaiser <- lsa(td.mat, dims=dimcalc_kaiser())
+lsaSpace_share <- lsa(td.mat, dims=dimcalc_share(share=0.6))# create LSA space
+lsaSpace_share_idf <- lsa(td.mat.lsa, dims=dimcalc_share(share=0.6))
+#lsaSpace <- lsa(td.mat.lsa, dims= dimcalc_kaiser())
+
+#teacher_lsa_mat<-as.textmatrix(lsaSpace)
+save(lsaSpace_kaiser,lsaSpace_share,lsaSpace_share_idf, teaching_TM, file="LSA_LDA_res.rda")
+save(teacher_desc, teach_dtm_idf,teach_corpus,td.mat, file="LSA_LDA_supp.rda")
+```
+
+# Run through all vacancies
+
+Here we illustrate how a vacancy is matched to teaching vacancies.
+
+Consider a vacancy with the following candidate description
+
+
+```{r}
+other_jobs <- read.table("../data_job_skills/output.30705741.txt", header=TRUE, sep="\t", quote="", stringsAsFactors = FALSE, comment="", encoding="UTF-8")
+
+#cat(other_jobs[1130,12])
+```
+
+Match the nearest vacancy and determine the Job Type
+
+```{r}
+
+#match_other_jobs_df <- data.frame(jobId =integer(), jobTitle=character(),maxJobType=character(), aardrijkskunde=numeric(), nederlands=numeric(), wiskunde=numeric(), cntAard=integer(), cntNed=integer(), cntWis=integer())
+
+match_other_jobs_list <- list()
+
+indx=0
+for(job in 1:nrow(other_jobs)){
+  if(nchar(other_jobs[job,12])!=0){
+    print(job)
+    myquery <- query_string_fxn(other_jobs[job,12])
+    scores <- match_nearest_vacancy(myquery)
+    if(max(scores)>.2){
+      indx = indx+1
+      match_docs<-which(scores >.2)
+      match_jobtype_df <- data.frame(cosinem = scores[scores>.2], jobType=teacher_descr_only[Docs(teach_dtm_idf)[match_docs],2])
+      match_other_jobs_list[[indx]] <- list(other_jobs[job,c(1,3)],teacher_descr_only[Docs(teach_dtm_idf)[which.max(scores)],2], max(scores),aggregate(cosinem~jobType, data=match_jobtype_df, FUN=mean), table(match_jobtype_df[,2]) )
+    }
+  }
+}
+
+
+query_string_fxn <- function(orig_string){
+
+query_string <- str_replace_all(string=tolower(orig_string), pattern="[[:punct:]]", replacement=" ")
+
+
+myquery<-lsa::query(query_string, rownames(teacher_lsa_mat), stemming=TRUE, language="nl")
+
+#global_weights <- gw_idf(td.mat)
+my_query_trans <- lw_bintf(myquery )* global_weights
+
+q<-fold_in(my_query_trans, lsaSpace)
+#q<-fold_in(myquery, lsaSpace)
+return(q)
+}
+```
+
+Find the most similar vacancy and determine the job type.
+
+```{r}
+
+match_nearest_vacancy <- function(query_vector){
+qd <- 0
+for (i in 1:ncol(teacher_lsa_mat)) {
+ 
+	qd[i] <- cosine(as.vector(query_vector),as.vector(teacher_lsa_mat[,i]))
+ #qd[i] <- sqrt(sum((as.vector(q)-as.vector(teacher_lsa_mat[,i]))^2))
+}
+return(qd)
+}
+```
+
+The nearest vacancy is
+
+
+```{r}
+#match_values<-sort(qd, decreasing=TRUE)[1:16]
+match_docs<-which(qd >.2)
+#match_docs
+
+#Docs(teach_dtm_idf)[match_docs]
+
+#teach_corpus[["11516"]]$content
+
+#Terms(teach_dtm_idf)[which(as.vector(teach_dtm_idf[2290,])>0)]
+
+#teacher_descr_only[Docs(teach_dtm_idf)[match_docs],2]
+
+match_jobtype_df <- data.frame(cosinem = qd[qd>.2], jobType=teacher_descr_only[Docs(teach_dtm_idf)[match_docs],2])
+#detach(match_jobtype_df)
+
+aggregate(cosinem~jobType, data=match_jobtype_df, FUN=mean)
+table(match_jobtype_df[,2])
+#teacher_descr_only[2523,1:2]
+```
+
+Vacancy `r which.max(qd)` corresponds to aardrijkskunde
+
+```{r}
+inspect(teach_dtm_idf[2923,])
+```
